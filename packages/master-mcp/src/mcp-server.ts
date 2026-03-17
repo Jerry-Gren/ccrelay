@@ -106,7 +106,17 @@ export function createMcpServer(relay: RelayClient): McpServer {
         }
 
         if (result.usage) {
-          text += `\n\n---\nTokens: ${result.usage.inputTokens} in / ${result.usage.outputTokens} out | Cost: $${result.usage.totalCostUsd.toFixed(4)}`;
+          text += `\n\n---\nThis command: ${result.usage.inputTokens} in / ${result.usage.outputTokens} out (${result.usage.cacheReadInputTokens} cached)`;
+          if (result.usage.totalCostUsd > 0) {
+            text += ` | Cost: $${result.usage.totalCostUsd.toFixed(4)}`;
+          }
+        }
+        const cumulative = (result as Record<string, unknown>)['cumulativeUsage'] as TokenUsage | undefined;
+        if (cumulative) {
+          text += `\nSession total: ${cumulative.inputTokens} in / ${cumulative.outputTokens} out`;
+          if (cumulative.totalCostUsd > 0) {
+            text += ` | Total cost: $${cumulative.totalCostUsd.toFixed(4)}`;
+          }
         }
 
         return {

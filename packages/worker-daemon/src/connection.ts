@@ -14,7 +14,7 @@ import {
   encryptPayload,
   createEnvelope,
 } from '@ccrelay/shared';
-import { executeCommand, cancelTask } from './executor.js';
+import { executeCommand, cancelTask, getCumulativeUsage, getActiveTasks } from './executor.js';
 import { execSync } from 'child_process';
 import os from 'os';
 
@@ -200,7 +200,9 @@ async function handleEnvelope(envelope: Envelope): Promise<void> {
 
       console.log(`[worker] Received command: ${payload.prompt.slice(0, 80)}...`);
 
-      const taskId = envelope.id;
+      // Use sender name as session key so consecutive commands from the same
+      // master share a continuous Claude session (session resume)
+      const taskId = envelope.from;
 
       try {
         const result = await executeCommand(taskId, payload.prompt, {
@@ -225,10 +227,11 @@ async function handleEnvelope(envelope: Envelope): Promise<void> {
         });
 
         const resultPayload = {
-          taskId,
+          taskId: envelope.id,
           status: result.aborted ? 'aborted' : (result.text !== null ? 'success' : 'error'),
           result: result.text,
           usage: result.usage,
+          cumulativeUsage: result.cumulativeUsage,
         };
 
         const { encrypted, nonce } = encryptPayload(
@@ -246,7 +249,7 @@ async function handleEnvelope(envelope: Envelope): Promise<void> {
         ws?.send(JSON.stringify(resultEnvelope));
       } catch (err) {
         const errorPayload = {
-          taskId,
+          taskId: envelope.id,
           status: 'error',
           error: err instanceof Error ? err.message : 'Unknown error',
         };
@@ -306,6 +309,13 @@ async function handleEnvelope(envelope: Envelope): Promise<void> {
           },
         };
       }
+
+      // Always include usage and active tasks
+      statusResponse.cumulativeUsage = getCumulativeUsage();
+      const active = getActiveTasks();
+      statusResponse.activeTasks = Array.from(active.entries()).map(
+        ([id, desc]) => `${id}: ${desc}`
+      );
 
       const { encrypted, nonce } = encryptPayload(
         statusResponse,
