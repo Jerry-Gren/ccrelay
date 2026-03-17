@@ -60,6 +60,23 @@ fly deploy
 
 Your relay is now live at `wss://your-app-name.fly.dev`.
 
+**SSH tunnel (free, no public server needed):**
+
+Run the relay on any machine (e.g. your laptop), then use SSH reverse tunnels so remote machines can reach it. No public IP or cloud account required.
+
+```bash
+# On your laptop: start the relay
+npm install && npm run build
+RELAY_SECRET=my-secret node packages/relay-server/dist/index.js
+```
+
+```bash
+# For each remote machine: open a tunnel from your laptop
+ssh -f -N -R 4080:localhost:4080 user@remote-machine
+```
+
+Now the remote machine can connect to `ws://localhost:4080` as if the relay were local. Workers on your laptop connect to `ws://localhost:4080` directly.
+
 **Local (for testing, or if all machines are on the same network):**
 
 ```bash
