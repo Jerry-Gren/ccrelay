@@ -86,12 +86,21 @@ RELAY_SECRET=my-secret node packages/relay-server/dist/index.js
 
 ### 2. Get your tokens
 
-When the relay starts, it prints two JWT tokens:
+When the relay starts, it prints two JWT tokens. How you see them depends on your deployment:
+
+**Docker / local:** tokens print directly to the terminal.
+
+**Fly.io:**
+
+```bash
+fly logs -a ccrelay --no-tail | grep token
+```
+
+You should see:
 
 ```
-[relay] === Connection Tokens ===
 [relay] Master token: eyJ...
-[relay] Worker token: eyJ...
+[relay] Worker token (generic): eyJ...
 ```
 
 Copy both. As long as you keep the same `RELAY_SECRET`, these tokens stay stable across restarts.
