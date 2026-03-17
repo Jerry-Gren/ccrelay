@@ -160,14 +160,17 @@ Claude uses these MCP tools automatically:
 
 | Tool | What it does |
 |------|-------------|
-| `list_workers` | Show all connected workers and their status |
+| `list_workers` | Show all connected workers and running tasks |
 | `worker_status` | Get git, CWD, and system info from a worker (zero tokens) |
-| `send_command` | Send a prompt to a worker and wait for the result |
-| `broadcast_command` | Send a prompt to multiple workers at once |
-| `cancel_command` | Abort a running command |
-| `list_sessions` | Show recent task history |
+| `send_command` | Send a command to a worker — returns immediately with a task ID |
+| `dispatch` | Send the same command to multiple workers at once |
+| `check_tasks` | See live progress of all running tasks (what tools each worker is calling) |
+| `get_result` | Wait for a specific task to finish and return the full result |
+| `cancel_command` | Cancel a running task |
 
-Each `send_command` runs a full Claude Code session on the worker machine — it can read files, write code, run tests, use git, and everything else Claude Code does.
+All commands are **non-blocking**. You can dispatch tasks to multiple workers in parallel, then monitor them all with `check_tasks`, and collect results with `get_result` when they finish.
+
+Each task runs a full Claude Code session on the worker machine — it can read files, write code, run tests, use git, and everything else Claude Code does. Sessions persist across commands, so workers remember context.
 
 ## How It Works
 

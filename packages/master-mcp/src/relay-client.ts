@@ -5,6 +5,8 @@ import {
   type Envelope,
   type HeartbeatMessage,
   type KeyExchangeResponse,
+  type StreamChunkPayload,
+  type ResultPayload,
   type WorkerInfo,
   type WireMessage,
   HEARTBEAT_INTERVAL_MS,
@@ -13,8 +15,8 @@ import {
   decryptPayload,
   createEnvelope,
 } from '@ccrelay/shared';
+import { addProgress, completeTask, getTask } from './task-tracker.js';
 
-type MessageHandler = (envelope: Envelope) => void;
 type WorkerEventHandler = (event: { type: 'connected' | 'disconnected'; worker: WorkerInfo | string }) => void;
 
 interface RelayClientOptions {
@@ -33,26 +35,18 @@ export class RelayClient {
   private authenticated = false;
   private options: RelayClientOptions;
 
-  // Known public keys (name -> public key) — auto-populated via key exchange
   private knownKeys = new Map<string, string>();
-  // Cached worker list
   private workers = new Map<string, WorkerInfo>();
-  // Pending responses: envelope ID -> resolve/reject
+  // For sendAndWait (used by worker_status)
   private pendingResponses = new Map<string, {
     resolve: (value: unknown) => void;
     reject: (reason: Error) => void;
     timer: NodeJS.Timeout;
   }>();
-  // Event handlers
-  private onMessage: MessageHandler | null = null;
   private onWorkerEvent: WorkerEventHandler | null = null;
 
   constructor(options: RelayClientOptions) {
     this.options = options;
-  }
-
-  setMessageHandler(handler: MessageHandler): void {
-    this.onMessage = handler;
   }
 
   setWorkerEventHandler(handler: WorkerEventHandler): void {
@@ -75,7 +69,6 @@ export class RelayClient {
     onFirstError?: (reason: Error) => void,
   ): void {
     const opts = this.options;
-
     this.ws = new WebSocket(opts.relayUrl);
 
     this.ws.on('open', () => {
@@ -103,9 +96,7 @@ export class RelayClient {
           this.authenticated = true;
           this.reconnectAttempt = 0;
           this.startHeartbeat();
-          // Auto-fetch all known keys
           this.ws?.send(JSON.stringify({ type: 'key_exchange' }));
-          // Also fetch workers list
           this.ws?.send(JSON.stringify({ type: 'workers_list' }));
           onFirstConnect?.();
           onFirstConnect = undefined;
@@ -123,7 +114,7 @@ export class RelayClient {
         for (const [name, key] of Object.entries(resp.keys)) {
           if (name !== opts.name) {
             this.knownKeys.set(name, key);
-            console.error(`[master] Learned public key for '${name}'`);
+            console.error(`[master] Learned key for '${name}'`);
           }
         }
         return;
@@ -141,7 +132,6 @@ export class RelayClient {
       if (msg.type === 'worker_connected') {
         const w = (msg as { type: 'worker_connected'; worker: WorkerInfo }).worker;
         this.workers.set(w.name, w);
-        // Fetch the new worker's key
         this.ws?.send(JSON.stringify({ type: 'key_exchange', requestKeys: [w.name] }));
         this.onWorkerEvent?.({ type: 'connected', worker: w });
         return;
@@ -159,11 +149,9 @@ export class RelayClient {
         return;
       }
 
-      // Handle envelope responses
+      // Handle envelopes: stream_chunk, result, status_response
       if ('encryptedPayload' in msg) {
-        const envelope = msg as Envelope;
-        this.handleEnvelopeResponse(envelope);
-        this.onMessage?.(envelope);
+        this.handleEnvelope(msg as Envelope);
       }
     });
 
@@ -182,60 +170,71 @@ export class RelayClient {
     });
   }
 
-  private handleEnvelopeResponse(envelope: Envelope): void {
-    const pending = this.pendingResponses.get(envelope.id);
-    if (pending) {
-      clearTimeout(pending.timer);
-      this.pendingResponses.delete(envelope.id);
+  private handleEnvelope(envelope: Envelope): void {
+    const workerKey = this.knownKeys.get(envelope.from);
+    if (!workerKey) return;
 
-      try {
-        const workerKey = this.knownKeys.get(envelope.from);
-        if (!workerKey) {
-          pending.reject(new Error(`No public key for worker '${envelope.from}'`));
-          return;
-        }
-        const payload = decryptPayload(
-          envelope.encryptedPayload,
-          envelope.nonce,
-          this.options.secretKey,
-          workerKey,
-        );
-        pending.resolve(payload);
-      } catch (err) {
-        pending.reject(err instanceof Error ? err : new Error('Decryption failed'));
+    let payload: Record<string, unknown>;
+    try {
+      payload = decryptPayload<Record<string, unknown>>(
+        envelope.encryptedPayload,
+        envelope.nonce,
+        this.options.secretKey,
+        workerKey,
+      );
+    } catch {
+      return;
+    }
+
+    // Stream chunk → add to task progress
+    if (envelope.type === 'stream_chunk') {
+      const taskId = payload['taskId'] as string;
+      const chunk = payload['chunk'] as string;
+      if (taskId && chunk) {
+        addProgress(taskId, chunk);
       }
       return;
     }
 
-    // Match by decrypted taskId for results (envelope ID differs from request ID)
+    // Result → complete the task
+    if (envelope.type === 'result') {
+      const taskId = payload['taskId'] as string;
+      if (taskId) {
+        completeTask(taskId, {
+          status: (payload['status'] as 'success' | 'error' | 'aborted') || 'error',
+          result: payload['result'] as string | undefined,
+          error: payload['error'] as string | undefined,
+          usage: payload['usage'] as any,
+          cumulativeUsage: payload['cumulativeUsage'] as any,
+        });
+      }
+      return;
+    }
+
+    // Status response or other → resolve pending request
+    const pending = this.pendingResponses.get(envelope.id);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingResponses.delete(envelope.id);
+      pending.resolve(payload);
+      return;
+    }
+
+    // Try matching by taskId for pending requests
     for (const [reqId, p] of this.pendingResponses) {
-      try {
-        const workerKey = this.knownKeys.get(envelope.from);
-        if (!workerKey) continue;
-        const payload = decryptPayload<Record<string, unknown>>(
-          envelope.encryptedPayload,
-          envelope.nonce,
-          this.options.secretKey,
-          workerKey,
-        );
-        if (payload && payload['taskId'] === reqId) {
-          clearTimeout(p.timer);
-          this.pendingResponses.delete(reqId);
-          p.resolve(payload);
-          return;
-        }
-      } catch {
-        // Decryption failed for this key, skip
+      if (payload['taskId'] === reqId || payload['worker'] === reqId) {
+        clearTimeout(p.timer);
+        this.pendingResponses.delete(reqId);
+        p.resolve(payload);
+        return;
       }
     }
   }
 
-  /** Ensure we have a key for a worker, fetching from relay if needed */
   private async ensureWorkerKey(workerName: string): Promise<string> {
     const existing = this.knownKeys.get(workerName);
     if (existing) return existing;
 
-    // Request key from relay
     return new Promise<string>((resolve, reject) => {
       const handler = (data: WebSocket.RawData) => {
         try {
@@ -251,7 +250,7 @@ export class RelayClient {
 
       const timer = setTimeout(() => {
         this.ws?.removeListener('message', handler);
-        reject(new Error(`Could not fetch public key for '${workerName}'. Is the worker connected?`));
+        reject(new Error(`Could not fetch key for '${workerName}'`));
       }, 5000);
 
       this.ws?.on('message', handler);
@@ -259,28 +258,25 @@ export class RelayClient {
     });
   }
 
-  /** Send an encrypted envelope to a worker and wait for response */
+  /** Send encrypted command to a worker (fire-and-forget, tracked by task-tracker) */
+  async fireCommand(workerName: string, payload: unknown): Promise<string> {
+    const workerKey = await this.ensureWorkerKey(workerName);
+    const { encrypted, nonce } = encryptPayload(payload, this.options.secretKey, workerKey);
+    const envelope = createEnvelope(this.options.name, workerName, 'command', encrypted, nonce);
+    this.ws?.send(JSON.stringify(envelope));
+    return envelope.id;
+  }
+
+  /** Send and wait for a direct response (used for status_request) */
   async sendAndWait<T = unknown>(
     workerName: string,
     type: Envelope['type'],
     payload: unknown,
-    timeoutMs: number = 120_000,
+    timeoutMs: number = 15_000,
   ): Promise<T> {
     const workerKey = await this.ensureWorkerKey(workerName);
-
-    const { encrypted, nonce } = encryptPayload(
-      payload,
-      this.options.secretKey,
-      workerKey,
-    );
-
-    const envelope = createEnvelope(
-      this.options.name,
-      workerName,
-      type,
-      encrypted,
-      nonce,
-    );
+    const { encrypted, nonce } = encryptPayload(payload, this.options.secretKey, workerKey);
+    const envelope = createEnvelope(this.options.name, workerName, type, encrypted, nonce);
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -298,29 +294,14 @@ export class RelayClient {
     });
   }
 
-  /** Send without waiting for response */
-  async send(workerName: string, type: Envelope['type'], payload: unknown): Promise<string> {
+  /** Send cancel to worker */
+  async sendCancel(workerName: string, taskId: string): Promise<void> {
     const workerKey = await this.ensureWorkerKey(workerName);
-
-    const { encrypted, nonce } = encryptPayload(
-      payload,
-      this.options.secretKey,
-      workerKey,
-    );
-
-    const envelope = createEnvelope(
-      this.options.name,
-      workerName,
-      type,
-      encrypted,
-      nonce,
-    );
-
+    const { encrypted, nonce } = encryptPayload({ taskId }, this.options.secretKey, workerKey);
+    const envelope = createEnvelope(this.options.name, workerName, 'cancel', encrypted, nonce);
     this.ws?.send(JSON.stringify(envelope));
-    return envelope.id;
   }
 
-  /** Request workers list from relay */
   requestWorkersList(): void {
     this.ws?.send(JSON.stringify({ type: 'workers_list' }));
   }

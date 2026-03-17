@@ -211,18 +211,19 @@ async function handleEnvelope(envelope: Envelope): Promise<void> {
 
       console.log(`${c.blue}${c.bold}Command from ${envelope.from}:${c.reset} ${payload.prompt.slice(0, 100)}`);
 
-      // Use sender name as session key so consecutive commands from the same
-      // master share a continuous Claude session (session resume)
-      const taskId = envelope.from;
+      // Session key = sender name (so consecutive commands share a Claude session)
+      // Envelope ID = task ID (for tracking progress on the master side)
+      const sessionKey = envelope.from;
+      const trackingId = envelope.id;
 
       try {
-        const result = await executeCommand(taskId, payload.prompt, {
+        const result = await executeCommand(sessionKey, payload.prompt, {
           model: payload.options?.model,
           cwd: payload.options?.cwd || opts.cwd,
           timeout: payload.options?.timeout,
           onProgress: (chunk) => {
             const { encrypted, nonce } = encryptPayload(
-              { taskId, chunk, done: false },
+              { taskId: trackingId, chunk, done: false },
               opts.secretKey,
               senderKey,
             );
