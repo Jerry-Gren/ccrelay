@@ -83,30 +83,53 @@ export async function executeCommand(
       // Track session ID
       if (ev['type'] === 'system' && ev['subtype'] === 'init') {
         newSessionId = ev['session_id'] as string;
+        console.log(`\n━━━ Session: ${newSessionId?.slice(0, 8)} ━━━`);
       }
 
-      // Stream tool activity as progress
-      if (ev['type'] === 'tool_progress' && options?.onProgress) {
+      // Tool activity
+      if (ev['type'] === 'tool_progress') {
         const toolName = ev['tool_name'] as string | undefined;
         if (toolName) {
-          options.onProgress(`[using ${toolName}]`);
+          console.log(`  [tool] ${toolName}`);
+          options?.onProgress?.(`[${toolName}]`);
         }
       }
 
-      // Stream assistant text as progress
-      if (ev['type'] === 'assistant' && options?.onProgress) {
-        const content = ev['content'] as string | undefined;
+      // Assistant text
+      if (ev['type'] === 'assistant') {
+        const message = ev['message'] as Record<string, unknown> | undefined;
+        const content = message?.['content'] as Array<Record<string, unknown>> | undefined;
         if (content) {
-          options.onProgress(content);
+          for (const block of content) {
+            if (block['type'] === 'text' && block['text']) {
+              const text = block['text'] as string;
+              console.log(`  ${text.slice(0, 200)}`);
+              options?.onProgress?.(text);
+            }
+            if (block['type'] === 'tool_use') {
+              const name = block['name'] as string;
+              const input = block['input'] as Record<string, unknown> | undefined;
+              const summary = input?.['command'] || input?.['pattern'] || input?.['file_path'] || input?.['query'] || '';
+              console.log(`  [call] ${name}${summary ? ': ' + String(summary).slice(0, 100) : ''}`);
+              options?.onProgress?.(`[${name}${summary ? ': ' + String(summary).slice(0, 60) : ''}]`);
+            }
+          }
         }
       }
 
       // Sub-agent activity
-      if (ev['type'] === 'system' && ev['subtype'] === 'task_started' && options?.onProgress) {
+      if (ev['type'] === 'system' && ev['subtype'] === 'task_started') {
         const desc = ev['description'] as string | undefined;
         if (desc) {
-          options.onProgress(`[started sub-agent: ${desc}]`);
+          console.log(`  [agent] started: ${desc}`);
+          options?.onProgress?.(`[agent: ${desc}]`);
         }
+      }
+
+      if (ev['type'] === 'system' && ev['subtype'] === 'task_notification') {
+        const summary = ev['summary'] as string | undefined;
+        const status = ev['status'] as string | undefined;
+        console.log(`  [agent] ${status}: ${summary?.slice(0, 100)}`);
       }
 
       // Final result
@@ -125,6 +148,12 @@ export async function executeCommand(
             totalCostUsd: costUsd,
           };
         }
+
+        console.log(`\n  [result] ${resultText?.slice(0, 200) ?? '(no output)'}`);
+        if (usage) {
+          console.log(`  [usage] ${usage.inputTokens} in / ${usage.outputTokens} out / ${usage.cacheReadInputTokens} cached`);
+        }
+        console.log(`━━━ Done ━━━\n`);
       }
     }
   } finally {
