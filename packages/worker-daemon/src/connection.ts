@@ -18,6 +18,17 @@ import { executeCommand, cancelTask, getCumulativeUsage, getActiveTasks } from '
 import { execSync } from 'child_process';
 import os from 'os';
 
+const c = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+  cyan: '\x1b[36m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  blue: '\x1b[34m',
+};
+
 interface ConnectionOptions {
   relayUrl: string;
   token: string;
@@ -44,12 +55,12 @@ export function connect(options: ConnectionOptions): void {
 
 function doConnect(): void {
   const opts = connectionOptions;
-  console.log(`[worker] Connecting to ${opts.relayUrl}...`);
+  console.log(`${c.dim}connecting...${c.reset}`);
 
   ws = new WebSocket(opts.relayUrl);
 
   ws.on('open', () => {
-    console.log('[worker] Connected, authenticating...');
+    console.log(`${c.dim}authenticating...${c.reset}`);
     const authMsg: AuthMessage = {
       type: 'auth',
       token: opts.token,
@@ -65,7 +76,7 @@ function doConnect(): void {
     try {
       msg = JSON.parse(data.toString()) as WireMessage;
     } catch {
-      console.error('[worker] Invalid message received');
+      console.error(`${c.red}invalid message received${c.reset}`);
       return;
     }
 
@@ -73,17 +84,17 @@ function doConnect(): void {
   });
 
   ws.on('close', (code, reason) => {
-    console.log(`[worker] Disconnected: ${code} ${reason.toString()}`);
+    console.log(`${c.yellow}disconnected${c.reset} ${c.dim}(${code})${c.reset}`);
     stopHeartbeat();
     if (shouldReconnect) {
       const delay = reconnectDelay(reconnectAttempt++);
-      console.log(`[worker] Reconnecting in ${Math.round(delay / 1000)}s...`);
+      console.log(`${c.dim}reconnecting in ${Math.round(delay / 1000)}s...${c.reset}`);
       setTimeout(doConnect, delay);
     }
   });
 
   ws.on('error', (err) => {
-    console.error('[worker] WebSocket error:', err.message);
+    console.error(`${c.red}ws error: ${err.message}${c.reset}`);
   });
 }
 
@@ -91,13 +102,13 @@ function handleMessage(msg: WireMessage): void {
   if (msg.type === 'auth_response') {
     const authResp = msg as AuthResponse;
     if (authResp.success) {
-      console.log(`[worker] Authenticated as '${connectionOptions.name}'`);
+      console.log(`${c.green}${c.bold}connected${c.reset} ${c.dim}waiting for commands...${c.reset}\n`);
       reconnectAttempt = 0;
       startHeartbeat();
       // Request all known public keys (to learn the master's key)
       ws?.send(JSON.stringify({ type: 'key_exchange' }));
     } else {
-      console.error(`[worker] Auth failed: ${authResp.error}`);
+      console.error(`${c.red}auth failed: ${authResp.error}${c.reset}`);
       shouldReconnect = false;
       ws?.close();
     }
@@ -110,7 +121,7 @@ function handleMessage(msg: WireMessage): void {
     for (const [name, key] of Object.entries(resp.keys)) {
       if (name !== connectionOptions.name) {
         knownKeys.set(name, key);
-        console.log(`[worker] Learned public key for '${name}'`);
+        console.log(`${c.dim}learned key for '${name}'${c.reset}`);
       }
     }
     return;
@@ -134,7 +145,7 @@ async function fetchKeyAndWait(name: string): Promise<string | undefined> {
       const msg = JSON.parse(data.toString());
       if (msg.type === 'key_exchange_response' && msg.keys[name]) {
         knownKeys.set(name, msg.keys[name]);
-        console.log(`[worker] Learned public key for '${name}'`);
+        console.log(`${c.dim}learned key for '${name}'${c.reset}`);
         ws?.removeListener('message', handler);
         clearTimeout(timer);
         resolve(msg.keys[name]);
@@ -152,7 +163,7 @@ async function fetchKeyAndWait(name: string): Promise<string | undefined> {
 async function resolveKey(name: string): Promise<string | undefined> {
   let key = getSenderKey(name);
   if (!key) {
-    console.log(`[worker] No public key for sender '${name}', fetching...`);
+    console.log(`${c.dim}fetching key for '${name}'...${c.reset}`);
     key = await fetchKeyAndWait(name);
   }
   return key;
@@ -170,21 +181,21 @@ async function handleEnvelope(envelope: Envelope): Promise<void> {
   const opts = connectionOptions;
   let senderKey = await resolveKey(envelope.from);
   if (!senderKey) {
-    console.error(`[worker] Could not get key for '${envelope.from}', dropping envelope`);
+    console.error(`${c.red}no key for '${envelope.from}', dropping message${c.reset}`);
     return;
   }
 
   // Try decrypt; on failure, refresh key and retry once (sender may have reconnected with new key)
   let testDecrypt = tryDecrypt<unknown>(envelope.encryptedPayload, envelope.nonce, opts.secretKey, senderKey);
   if (testDecrypt === null) {
-    console.log(`[worker] Decryption failed for '${envelope.from}', refreshing key...`);
+    console.log(`${c.yellow}stale key for '${envelope.from}', refreshing...${c.reset}`);
     const freshKey = await fetchKeyAndWait(envelope.from);
     if (freshKey && freshKey !== senderKey) {
       senderKey = freshKey;
       testDecrypt = tryDecrypt<unknown>(envelope.encryptedPayload, envelope.nonce, opts.secretKey, senderKey);
     }
     if (testDecrypt === null) {
-      console.error(`[worker] Decryption still failed for '${envelope.from}', dropping envelope`);
+      console.error(`${c.red}decryption failed for '${envelope.from}', dropping message${c.reset}`);
       return;
     }
   }
@@ -198,7 +209,7 @@ async function handleEnvelope(envelope: Envelope): Promise<void> {
         senderKey,
       );
 
-      console.log(`[worker] Received command: ${payload.prompt.slice(0, 80)}...`);
+      console.log(`${c.blue}${c.bold}Command from ${envelope.from}:${c.reset} ${payload.prompt.slice(0, 100)}`);
 
       // Use sender name as session key so consecutive commands from the same
       // master share a continuous Claude session (session resume)
@@ -342,7 +353,7 @@ async function handleEnvelope(envelope: Envelope): Promise<void> {
       cancelTask(payload.taskId);
     }
   } catch (err) {
-    console.error('[worker] Error handling envelope:', err);
+    console.error(`${c.red}error handling message: ${err}${c.reset}`);
   }
 }
 

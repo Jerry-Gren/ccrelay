@@ -1,7 +1,21 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { TokenUsage } from '@ccrelay/shared';
 
-// Session persistence: worker name -> sessionId for resume
+// --- Colors ---
+const c = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+  cyan: '\x1b[36m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  magenta: '\x1b[35m',
+  blue: '\x1b[34m',
+  gray: '\x1b[90m',
+  white: '\x1b[37m',
+};
+
+// Session persistence: sender name -> sessionId for resume
 const sessions = new Map<string, string>();
 
 // Cumulative usage tracking across all commands
@@ -83,35 +97,23 @@ export async function executeCommand(
       // Track session ID
       if (ev['type'] === 'system' && ev['subtype'] === 'init') {
         newSessionId = ev['session_id'] as string;
-        console.log(`\n━━━ Session: ${newSessionId?.slice(0, 8)} ━━━`);
+        const resumed = resumeSessionId ? `${c.green}resumed${c.reset}` : `${c.yellow}new${c.reset}`;
+        console.log(`\n${c.cyan}${c.bold}━━━ Session ${newSessionId?.slice(0, 8)} (${resumed}${c.cyan}${c.bold}) ━━━${c.reset}`);
       }
 
-      // Tool activity
-      if (ev['type'] === 'tool_progress') {
-        const toolName = ev['tool_name'] as string | undefined;
-        if (toolName) {
-          console.log(`  [tool] ${toolName}`);
-          options?.onProgress?.(`[${toolName}]`);
-        }
-      }
-
-      // Assistant text
+      // Tool use calls
       if (ev['type'] === 'assistant') {
         const message = ev['message'] as Record<string, unknown> | undefined;
         const content = message?.['content'] as Array<Record<string, unknown>> | undefined;
         if (content) {
           for (const block of content) {
-            if (block['type'] === 'text' && block['text']) {
-              const text = block['text'] as string;
-              console.log(`  ${text.slice(0, 200)}`);
-              options?.onProgress?.(text);
-            }
             if (block['type'] === 'tool_use') {
               const name = block['name'] as string;
               const input = block['input'] as Record<string, unknown> | undefined;
-              const summary = input?.['command'] || input?.['pattern'] || input?.['file_path'] || input?.['query'] || '';
-              console.log(`  [call] ${name}${summary ? ': ' + String(summary).slice(0, 100) : ''}`);
-              options?.onProgress?.(`[${name}${summary ? ': ' + String(summary).slice(0, 60) : ''}]`);
+              const detail = input?.['command'] || input?.['pattern'] || input?.['file_path'] || input?.['query'] || '';
+              const detailStr = detail ? `${c.gray} ${String(detail).slice(0, 100)}${c.reset}` : '';
+              console.log(`  ${c.yellow}>${c.reset} ${c.bold}${name}${c.reset}${detailStr}`);
+              options?.onProgress?.(`[${name}${detail ? ': ' + String(detail).slice(0, 60) : ''}]`);
             }
           }
         }
@@ -121,7 +123,7 @@ export async function executeCommand(
       if (ev['type'] === 'system' && ev['subtype'] === 'task_started') {
         const desc = ev['description'] as string | undefined;
         if (desc) {
-          console.log(`  [agent] started: ${desc}`);
+          console.log(`  ${c.magenta}+${c.reset} ${c.magenta}agent:${c.reset} ${desc}`);
           options?.onProgress?.(`[agent: ${desc}]`);
         }
       }
@@ -129,14 +131,15 @@ export async function executeCommand(
       if (ev['type'] === 'system' && ev['subtype'] === 'task_notification') {
         const summary = ev['summary'] as string | undefined;
         const status = ev['status'] as string | undefined;
-        console.log(`  [agent] ${status}: ${summary?.slice(0, 100)}`);
+        const statusColor = status === 'completed' ? c.green : c.yellow;
+        console.log(`  ${c.magenta}-${c.reset} ${statusColor}${status}:${c.reset} ${summary?.slice(0, 120)}`);
       }
 
       // Final result
       if (ev['type'] === 'result') {
         resultText = (ev['result'] as string | null | undefined) ?? null;
 
-        // Extract usage — try multiple field name patterns
+        // Extract usage
         const evUsage = (ev['usage'] ?? ev['token_usage']) as Record<string, number> | undefined;
         const costUsd = (ev['total_cost_usd'] ?? ev['costUsd'] ?? ev['cost_usd'] ?? 0) as number;
 
@@ -149,11 +152,22 @@ export async function executeCommand(
           };
         }
 
-        console.log(`\n  [result] ${resultText?.slice(0, 200) ?? '(no output)'}`);
-        if (usage) {
-          console.log(`  [usage] ${usage.inputTokens} in / ${usage.outputTokens} out / ${usage.cacheReadInputTokens} cached`);
+        // Print result preview
+        if (resultText) {
+          const preview = resultText.slice(0, 300).replace(/\n/g, '\n  ');
+          console.log(`\n  ${c.green}${c.bold}Result:${c.reset}`);
+          console.log(`  ${c.white}${preview}${c.reset}${resultText.length > 300 ? `${c.dim}...${c.reset}` : ''}`);
         }
-        console.log(`━━━ Done ━━━\n`);
+
+        // Print usage
+        if (usage) {
+          const parts = [];
+          if (usage.inputTokens > 0) parts.push(`${usage.inputTokens} in`);
+          parts.push(`${usage.outputTokens} out`);
+          if (usage.cacheReadInputTokens > 0) parts.push(`${c.green}${usage.cacheReadInputTokens} cached${c.reset}`);
+          console.log(`  ${c.dim}tokens: ${parts.join(' / ')}${c.reset}`);
+        }
+        console.log(`${c.cyan}${c.bold}━━━ Done ━━━${c.reset}\n`);
       }
     }
   } finally {

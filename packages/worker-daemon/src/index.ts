@@ -1,6 +1,15 @@
 import { connect, disconnect } from './connection.js';
 import { generateKeyPair } from '@ccrelay/shared';
 
+const c = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  cyan: '\x1b[36m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+};
+
 // Parse CLI args
 const args = process.argv.slice(2);
 function getArg(name: string): string | undefined {
@@ -15,16 +24,19 @@ const name = getArg('name') || process.env.WORKER_NAME || `worker-${process.pid}
 const cwd = getArg('cwd') || process.cwd();
 
 if (!token) {
-  console.error('Error: --token or RELAY_TOKEN is required');
-  console.error('Usage: ccrelay-worker --relay <url> --token <jwt> --name <name>');
+  console.error(`${c.yellow}Error: --token or RELAY_TOKEN is required${c.reset}`);
+  console.error(`Usage: ccrelay-worker --relay <url> --token <jwt> --name <name>`);
   process.exit(1);
 }
 
 // Generate worker key pair
 const keyPair = generateKeyPair();
-console.log(`[worker] Name: ${name}`);
-console.log(`[worker] CWD: ${cwd}`);
-console.log(`[worker] Connecting to: ${relayUrl}`);
+
+console.log(`${c.cyan}${c.bold}ccrelay worker${c.reset}`);
+console.log(`  ${c.dim}name:${c.reset}  ${c.bold}${name}${c.reset}`);
+console.log(`  ${c.dim}cwd:${c.reset}   ${cwd}`);
+console.log(`  ${c.dim}relay:${c.reset} ${relayUrl}`);
+console.log('');
 
 connect({
   relayUrl,
@@ -37,7 +49,7 @@ connect({
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\n[worker] Shutting down...');
+  console.log(`\n${c.dim}shutting down...${c.reset}`);
   disconnect();
   process.exit(0);
 });
