@@ -133,17 +133,14 @@ RELAY_TOKEN="..." node packages/worker-daemon/dist/index.js --name frontend --cw
 RELAY_TOKEN="..." node packages/worker-daemon/dist/index.js --name backend --cwd ~/backend &
 ```
 
-### 4. Add the master to Claude Code
-
-Run this once on the machine where you use Claude Code:
+### 4. Start a master session
 
 ```bash
-claude mcp add ccrelay -- node /path/to/ccrelay/packages/master-mcp/dist/index.js \
-  --relay wss://your-app-name.fly.dev \
-  --token "<master-token>"
+cd ccrelay
+./start-master.sh --relay wss://your-app-name.fly.dev --token "<master-token>"
 ```
 
-Done. Start a Claude Code session and talk to your workers.
+This launches Claude Code with the relay tools available **only in this session**. Other Claude Code sessions on the same machine are not affected. When you close it, the relay tools are gone.
 
 ## Usage
 
