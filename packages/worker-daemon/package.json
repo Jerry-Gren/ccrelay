@@ -1,0 +1,24 @@
+{
+  "name": "ccrelay-worker",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "ccrelay-worker": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean && printf '#!/usr/bin/env node\\n' | cat - dist/index.js > dist/tmp && mv dist/tmp dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.34",
+    "@ccrelay/shared": "*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "tsup": "^8.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
