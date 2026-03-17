@@ -13,6 +13,9 @@ export function initDatabase(dbPath?: string): void {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   createSchema();
+  // Reset all workers to offline on startup — no stale entries from previous runs
+  db.prepare("UPDATE workers SET status = 'offline'").run();
+  db.prepare("DELETE FROM message_queue").run();
 }
 
 function createSchema(): void {
@@ -99,8 +102,11 @@ export function getWorker(name: string): (WorkerInfo & { publicKey?: string }) |
   };
 }
 
-export function getAllWorkers(): WorkerInfo[] {
-  const rows = db.prepare('SELECT * FROM workers ORDER BY name').all() as Record<string, unknown>[];
+export function getAllWorkers(onlineOnly: boolean = true): WorkerInfo[] {
+  const query = onlineOnly
+    ? "SELECT * FROM workers WHERE status != 'offline' ORDER BY name"
+    : 'SELECT * FROM workers ORDER BY name';
+  const rows = db.prepare(query).all() as Record<string, unknown>[];
   return rows.map((row) => ({
     id: row.id as string,
     name: row.name as string,
