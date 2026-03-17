@@ -14,32 +14,57 @@ You talk to your master Claude Code session normally. It delegates work to worke
 
 ### 1. Deploy the relay
 
-The relay is a lightweight message broker. Deploy it anywhere publicly reachable.
+The relay is a lightweight message broker. It uses minimal resources (just SQLite + WebSocket routing), so the smallest/cheapest server works fine. Deploy it anywhere publicly reachable.
 
-**Fly.io (recommended):**
+**Any VPS or server you already have (free):**
+
+If you have a server with a public IP (Oracle Cloud always-free tier, a home server, a spare VM, etc.), just run the relay there with Docker:
 
 ```bash
-# Install flyctl if you haven't: https://fly.io/docs/flyctl/install/
+git clone https://github.com/Stanleytowne/ccrelay.git
+cd ccrelay
+```
+
+```bash
+# Generate a secret first
+openssl rand -hex 32
+# Then run with it
+RELAY_SECRET=your-generated-secret docker compose up -d
+```
+
+Your relay is at `ws://your-server-ip:4080`. For TLS, put it behind nginx/caddy with a domain and use `wss://`.
+
+> **Oracle Cloud always-free tier** is a good option if you need a server — it gives you an ARM VM with 4 CPU / 24GB RAM at no cost, more than enough for this relay.
+
+**Fly.io (~$3-5/month):**
+
+Fly.io is the fastest way to get a public `wss://` endpoint with TLS, but it is not free.
+
+```bash
+# Install flyctl: https://fly.io/docs/flyctl/install/
 cd ccrelay
 fly launch --no-deploy
-fly secrets set RELAY_SECRET="$(openssl rand -hex 32)"
+```
+
+```bash
+# Generate a secret and set it
+openssl rand -hex 32
+# Copy the output, then:
+fly secrets set RELAY_SECRET=your-generated-secret
+```
+
+```bash
 fly volumes create ccrelay_data --region sjc --size 1
 fly deploy
 ```
 
 Your relay is now live at `wss://your-app-name.fly.dev`.
 
-**Docker (self-hosted):**
-
-```bash
-RELAY_SECRET="$(openssl rand -hex 32)" docker compose up -d
-```
-
-**Local (for testing):**
+**Local (for testing, or if all machines are on the same network):**
 
 ```bash
 npm install && npm run build
-RELAY_SECRET="my-secret" node packages/relay-server/dist/index.js
+RELAY_SECRET=my-secret node packages/relay-server/dist/index.js
 ```
 
 ### 2. Get your tokens
